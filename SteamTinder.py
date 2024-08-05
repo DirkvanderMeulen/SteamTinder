@@ -15,7 +15,7 @@ from selenium.webdriver.support import expected_conditions as EC
 class SteamGameVoter:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Steam Game Voting UI")
+        self.root.title("Steam Tinder")
         self.root.geometry("400x300")
         self.entries = []
         self.results = {}
