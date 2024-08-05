@@ -24,6 +24,13 @@ class SteamGameVoter:
         self.driver = None
         self.input_filename = ""
         self.process_completed = False
+        self.browser_var = tk.StringVar(value="Chrome")
+        self.always_on_top_var = tk.BooleanVar(value=False)
+
+    def __del__(self):
+        if self.driver:
+            self.driver.quit()
+        self.save_progress()
 
     def read_file(self, filename):
         self.input_filename = os.path.splitext(os.path.basename(filename))[0]
@@ -38,17 +45,27 @@ class SteamGameVoter:
         return voter
 
     def initialize_browser(self):
-        browser_choice = self.browser_var.get()
-        if browser_choice == "Chrome":
-            options = ChromeOptions()
-            self.driver = webdriver.Chrome(options=options)
-        elif browser_choice == "Firefox":
-            options = FirefoxOptions()
-            self.driver = webdriver.Firefox(options=options)
-        elif browser_choice == "Edge":
-            options = EdgeOptions()
-            self.driver = webdriver.Edge(options=options)
-        self.driver.maximize_window()
+        if self.driver is None:
+            browser_choice = self.browser_var.get()
+            if browser_choice == "Chrome":
+                options = ChromeOptions()
+                self.driver = webdriver.Chrome(options=options)
+            elif browser_choice == "Firefox":
+                options = FirefoxOptions()
+                self.driver = webdriver.Firefox(options=options)
+            elif browser_choice == "Edge":
+                options = EdgeOptions()
+                self.driver = webdriver.Edge(options=options)
+            else:
+                raise ValueError(f"Unsupported browser choice: {browser_choice}")
+            
+            self.driver.maximize_window()
+    
+    def change_browser(self):
+        if self.driver:
+            self.driver.quit()
+        self.driver = None
+        self.update_ui()  # This will cause the new browser to be initialized
 
     def open_webpage(self, url):
         if self.driver is None:
@@ -76,6 +93,7 @@ class SteamGameVoter:
     def show_results(self):
         if self.driver:
             self.driver.quit()
+            self.driver = None
         self.root.destroy()
         result_str = "\n".join([f"{self.entries[index]['name']}: {'Yes' if vote else 'No'}" for index, vote in self.results.items()])
         messagebox.showinfo("Voting Results", result_str)
@@ -131,31 +149,63 @@ class SteamGameVoter:
         return False
 
     def create_ui(self):
-        self.entry_label = tk.Label(self.root, text="", wraplength=380, justify="center")
-        self.entry_label.pack(pady=10)
+        self.root.configure(bg='#f0f0f0')
+        self.root.grid_rowconfigure(0, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
 
-        self.progress_label = tk.Label(self.root, text="")
-        self.progress_label.pack(pady=5)
+        main_frame = tk.Frame(self.root, bg='#f0f0f0')
+        main_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        main_frame.grid_rowconfigure(0, weight=1)
+        main_frame.grid_columnconfigure(0, weight=1)
 
-        button_frame = tk.Frame(self.root)
-        button_frame.pack(pady=10)
+        # Game info frame
+        info_frame = tk.Frame(main_frame, bg='white', bd=2, relief=tk.RAISED)
+        info_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
 
-        yes_button = tk.Button(button_frame, text="Yes", command=lambda: self.vote(True), width=10)
-        yes_button.pack(side=tk.LEFT, padx=10)
+        self.entry_label = tk.Label(info_frame, text="", wraplength=340, justify="center", bg='white', font=('Arial', 12))
+        self.entry_label.pack(pady=10, expand=True)
 
-        no_button = tk.Button(button_frame, text="No", command=lambda: self.vote(False), width=10)
-        no_button.pack(side=tk.RIGHT, padx=10)
+        self.progress_label = tk.Label(main_frame, text="", bg='#f0f0f0', font=('Arial', 10))
+        self.progress_label.grid(row=1, column=0, sticky="ew")
 
-        save_button = tk.Button(self.root, text="Save Progress", command=self.save_progress, width=15)
-        save_button.pack(pady=5)
+        # Button frame
+        button_frame = tk.Frame(main_frame, bg='#f0f0f0')
+        button_frame.grid(row=2, column=0, sticky="ew", pady=10)
+        button_frame.grid_columnconfigure(0, weight=1)
+        button_frame.grid_columnconfigure(2, weight=1)
 
-        self.browser_var = tk.StringVar(value="Chrome")
-        browser_frame = tk.Frame(self.root)
-        browser_frame.pack(pady=5)
-        tk.Label(browser_frame, text="Browser:").pack(side=tk.LEFT)
-        tk.Radiobutton(browser_frame, text="Chrome", variable=self.browser_var, value="Chrome").pack(side=tk.LEFT)
-        tk.Radiobutton(browser_frame, text="Firefox", variable=self.browser_var, value="Firefox").pack(side=tk.LEFT)
-        tk.Radiobutton(browser_frame, text="Edge", variable=self.browser_var, value="Edge").pack(side=tk.LEFT)
+        # X button (No)
+        x_button = tk.Button(button_frame, text="❌", command=lambda: self.vote(False), 
+                             font=('Arial', 20), bg='white', fg='red', width=3, height=1)
+        x_button.grid(row=0, column=0, sticky="w")
+
+        # Check button (Yes)
+        check_button = tk.Button(button_frame, text="✔️", command=lambda: self.vote(True), 
+                                 font=('Arial', 20), bg='white', fg='green', width=3, height=1)
+        check_button.grid(row=0, column=2, sticky="e")
+
+        save_button = tk.Button(main_frame, text="Save Progress", command=self.save_progress, 
+                                width=15, bg='#4CAF50', fg='white', font=('Arial', 10))
+        save_button.grid(row=3, column=0, sticky="ew", pady=(0, 10))
+
+        # Browser selection frame
+        browser_frame = tk.Frame(main_frame, bg='#f0f0f0')
+        browser_frame.grid(row=4, column=0, sticky="ew")
+
+        tk.Label(browser_frame, text="Browser:", bg='#f0f0f0', font=('Arial', 10)).pack(side=tk.LEFT, padx=5)
+
+        browsers = [("Chrome", "Chrome"), ("Firefox", "Firefox"), ("Edge", "Edge")]
+        for text, value in browsers:
+            tk.Radiobutton(browser_frame, text=text, variable=self.browser_var, value=value, 
+                           command=self.change_browser, bg='#f0f0f0', font=('Arial', 10)).pack(side=tk.LEFT, padx=5)
+        
+        # Always on top checkbutton
+        always_on_top_check = tk.Checkbutton(main_frame, text="Keep this window in foreground", variable=self.always_on_top_var,
+                                             command=self.toggle_always_on_top, bg='#f0f0f0', font=('Arial', 10))
+        always_on_top_check.grid(row=5, column=0, sticky="w", pady=(10, 0))
+
+    def toggle_always_on_top(self):
+        self.root.attributes('-topmost', self.always_on_top_var.get())
 
     def select_file(self):
         file_path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv")])
