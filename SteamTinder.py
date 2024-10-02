@@ -82,24 +82,15 @@ class SteamGameVoter:
         if self.current_index < len(self.entries):
             self.update_ui()
         else:
-            self.show_results()
+            self.save_results()
+            self.process_completed = True
+            self.delete_progress_file()
 
     def update_ui(self):
         entry = self.entries[self.current_index]
         self.entry_label.config(text=f"Game: {entry['name']}\nDeveloper: {entry['developers']}\nRelease Date: {entry['release_date']}")
         self.progress_label.config(text=f"Progress: {self.current_index + 1}/{len(self.entries)}")
         self.open_webpage(entry['steam_page_url'])
-
-    def show_results(self):
-        if self.driver:
-            self.driver.quit()
-            self.driver = None
-        self.root.destroy()
-        result_str = "\n".join([f"{self.entries[index]['name']}: {'Yes' if vote else 'No'}" for index, vote in self.results.items()])
-        messagebox.showinfo("Voting Results", result_str)
-        self.save_results()
-        self.process_completed = True
-        self.delete_progress_file()
 
     def delete_progress_file(self):
         if os.path.exists('progress.json'):
@@ -120,6 +111,13 @@ class SteamGameVoter:
         self.save_csv(os.path.join(data_folder, no_filename), no_votes)
 
         messagebox.showinfo("Results Saved", f"Results have been saved to 'yes_votes.csv' and 'no_votes.csv' in {os.path.abspath(data_folder)}")
+        self.close_application()
+    
+    def close_application(self):
+        if self.driver:
+            self.driver.quit()
+        self.root.quit()
+        self.root.destroy()
 
     def save_csv(self, filename, data):
         with open(filename, 'w', newline='', encoding='utf-8') as file:
