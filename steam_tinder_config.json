@@ -1,5 +1,5 @@
 {
-    "database_path": "C:/Users/Durk/Desktop/steam_tinder.db",
+    "database_path": "steam_tinder.db",
     "browser": "Chrome",
     "always_on_top": false
 }

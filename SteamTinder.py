@@ -15,6 +15,7 @@ from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+import sys
 
 # Configuration constants
 CONFIG_FILE = "steam_tinder_config.json"
@@ -181,18 +182,27 @@ class SteamGameVoter:
 
     def load_config(self):
         """Load configuration from file or create default if not exists"""
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, 'r') as f:
-                    config = json.load(f)
-                print(f"Loaded configuration from {CONFIG_FILE}")
-                return config
-            except Exception as e:
-                print(f"Error loading config: {e}")
-                return DEFAULT_CONFIG.copy()
-        else:
-            print(f"Config file not found, using defaults")
-            return DEFAULT_CONFIG.copy()
+        config_locations = [
+            # 1. Look in the same directory as the executable
+            os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), CONFIG_FILE),
+            # 2. Look in the current working directory
+            CONFIG_FILE
+        ]
+        
+        # Try each location
+        for config_path in config_locations:
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, 'r') as f:
+                        config = json.load(f)
+                    print(f"Loaded configuration from {config_path}")
+                    return config
+                except Exception as e:
+                    print(f"Error loading config from {config_path}: {e}")
+        
+        # If no config found, use defaults
+        print(f"Config file not found in any location, using defaults")
+        return DEFAULT_CONFIG.copy()
             
     def save_config(self):
         """Save current configuration to file"""
@@ -207,11 +217,20 @@ class SteamGameVoter:
             if hasattr(self, 'always_on_top_var'):
                 self.config["always_on_top"] = self.always_on_top_var.get()
             
-            with open(CONFIG_FILE, 'w') as f:
+            # Save to the executable directory first if possible, otherwise to current directory
+            config_path = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), CONFIG_FILE)
+            with open(config_path, 'w') as f:
                 json.dump(self.config, f, indent=4)
-            print(f"Configuration saved to {CONFIG_FILE}")
+            print(f"Configuration saved to {config_path}")
         except Exception as e:
             print(f"Error saving config: {e}")
+            # Try saving to current directory as fallback
+            try:
+                with open(CONFIG_FILE, 'w') as f:
+                    json.dump(self.config, f, indent=4)
+                print(f"Configuration saved to {CONFIG_FILE} (fallback)")
+            except Exception as e2:
+                print(f"Error saving config to fallback location: {e2}")
 
     def __del__(self):
         """Clean up resources when object is destroyed"""
@@ -263,27 +282,32 @@ class SteamGameVoter:
         csv_frame = tk.LabelFrame(main_frame, text="CSV Operations", padx=10, pady=10, bg='#f0f0f0')
         csv_frame.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         
-        import_button = tk.Button(csv_frame, text="Import Games from CSV", command=self.select_file,
-                                 width=20, bg='#2196F3', fg='white', font=('Arial', 10))
+        import_button = tk.Button(csv_frame, text="Import CSV & Start Swiping", command=self.select_file,
+                                 width=25, bg='#2196F3', fg='white', font=('Arial', 10))
         import_button.grid(row=0, column=0, padx=5, pady=5)
         
-        import_dataset_button = tk.Button(csv_frame, text="Import Additional Dataset", 
+        import_dataset_button = tk.Button(csv_frame, text="Import CSV to Database Only", 
                                        command=self.import_additional_dataset,
-                                       width=20, bg='#2196F3', fg='white', font=('Arial', 10))
+                                       width=25, bg='#2196F3', fg='white', font=('Arial', 10))
         import_dataset_button.grid(row=0, column=1, padx=5, pady=5)
         
         export_button = tk.Button(csv_frame, text="Export New Yes Votes", command=self.export_new_yes_votes,
-                                 width=20, bg='#FF9800', fg='white', font=('Arial', 10))
+                                 width=25, bg='#FF9800', fg='white', font=('Arial', 10))
         export_button.grid(row=1, column=0, padx=5, pady=5)
         
         select_batch_button = tk.Button(csv_frame, text="Select Batch to Swipe", command=self.select_batch_from_db,
-                                     width=20, bg='#9C27B0', fg='white', font=('Arial', 10))
+                                     width=25, bg='#9C27B0', fg='white', font=('Arial', 10))
         select_batch_button.grid(row=1, column=1, padx=5, pady=5)
         
         # Add a button for unvoted games
         unvoted_button = tk.Button(csv_frame, text="Swipe Unvoted Games", command=self.swipe_unvoted_games,
-                                 width=20, bg='#E91E63', fg='white', font=('Arial', 10))
-        unvoted_button.grid(row=2, column=0, padx=5, pady=5, columnspan=2)
+                                 width=25, bg='#E91E63', fg='white', font=('Arial', 10))
+        unvoted_button.grid(row=2, column=0, padx=5, pady=5)
+        
+        # Add a button to wipe votes after export
+        wipe_button = tk.Button(csv_frame, text="Wipe Database Completely", command=self.wipe_votes_with_confirmation,
+                              width=25, bg='#F44336', fg='white', font=('Arial', 10))
+        wipe_button.grid(row=2, column=1, padx=5, pady=5)
         
         # Exit button
         exit_button = tk.Button(main_frame, text="Exit", command=self.close_application,
@@ -681,59 +705,135 @@ class SteamGameVoter:
         self.entries = []  # Clear any existing entries
         self.current_index = 0
         
-        # Try to get the first unvoted game
-        if self.load_next_unvoted_game():
-            # Create the UI for swiping
+        # Preload a batch of games to improve performance
+        self.preload_unvoted_games(10)  # Preload 10 games
+        
+        if hasattr(self, 'game_queue') and self.game_queue:
+            # Create the UI for swiping just once
             self.create_ui()
             # Add a label to show we're in random mode
             self.random_mode_label = tk.Label(self.root, text="RANDOM MODE: Swiping unvoted games", 
                                            bg='#E91E63', fg='white', font=('Arial', 10, 'bold'))
             self.random_mode_label.place(relx=0.5, y=5, anchor="n")
             
-            # Update the UI with the first game
-            self.update_ui()
+            # Get the first game from queue and update UI
+            self.load_next_from_queue()
         else:
             messagebox.showinfo("No Games", "No unvoted games found in the database.")
-            
-    def load_next_unvoted_game(self):
-        """Load the next random unvoted game from the database"""
-        if not hasattr(self, 'random_unvoted_mode') or not self.random_unvoted_mode:
-            return False
-            
+    
+    def preload_unvoted_games(self, count=5):
+        """Preload a batch of unvoted games to improve performance"""
+        self.game_queue = []
+        
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
             
-            # Get a random game that hasn't been voted on by this user
             try:
-                cursor.execute('''
+                # Get multiple random games at once - now with more aggressive locking to prevent conflicts
+                cursor.execute(f'''
                     SELECT g.* FROM games g
                     WHERE NOT EXISTS (
                         SELECT 1 FROM votes v 
                         WHERE v.game_id = g.id AND v.user_name = ?
                     )
                     ORDER BY RANDOM()
-                    LIMIT 1
+                    LIMIT {count}
                 ''', (self.user_name,))
                 
-                game = cursor.fetchone()
+                columns = [col[0] for col in cursor.description]
+                games = cursor.fetchall()
                 
-                if not game:
-                    # No more unvoted games
-                    messagebox.showinfo("All Done", "You've voted on all available games!")
-                    self.back_to_main_menu()
+                if not games:
                     return False
                     
-                # Convert to dictionary
-                self.current_game = dict(zip([col[0] for col in cursor.description], game))
-                self.entries = [self.current_game]  # Store for compatibility with other functions
-                
-                print(f"Loaded next unvoted game: {self.current_game['name']}")
+                # Convert to list of dictionaries
+                self.game_queue = [dict(zip(columns, game)) for game in games]
+                print(f"Preloaded {len(self.game_queue)} unvoted games")
                 return True
                 
             except Exception as e:
-                print(f"Error loading next unvoted game: {e}")
-                messagebox.showerror("Database Error", f"Error loading next game: {str(e)}")
+                print(f"Error preloading games: {e}")
                 return False
+    
+    def load_next_from_queue(self):
+        """Load the next game from the preloaded queue"""
+        # If queue is empty or nearly empty, preload more games
+        if not hasattr(self, 'game_queue') or len(self.game_queue) < 2:
+            # Preload more games if we're running low
+            self.preload_unvoted_games(10)
+            
+        if self.game_queue:
+            # Double-check that the first game in queue hasn't been voted on
+            with self.db.get_connection() as conn:
+                cursor = conn.cursor()
+                skipped = 0
+                
+                while self.game_queue:
+                    candidate_game = self.game_queue[0]
+                    
+                    # Check if this game is still unvoted
+                    cursor.execute('''
+                        SELECT 1 FROM votes 
+                        WHERE game_id = ? AND user_name = ?
+                    ''', (candidate_game['id'], self.user_name))
+                    
+                    if cursor.fetchone():
+                        # This game has been voted on already, remove it from queue
+                        self.game_queue.pop(0)
+                        skipped += 1
+                        print(f"Skipped already voted game: {candidate_game['name']}")
+                    else:
+                        # Game is still unvoted, we can use it
+                        break
+                
+                if skipped > 0:
+                    print(f"Skipped {skipped} games that were already voted on")
+                    # Replenish the queue if we skipped games
+                    self.preload_unvoted_games(skipped)
+            
+            if self.game_queue:
+                # Get the next game from the queue
+                self.current_game = self.game_queue.pop(0)
+                self.entries = [self.current_game]  # For compatibility
+                
+                # Update UI with the new game
+                self.update_ui_fast()
+                return True
+            else:
+                # No more unvoted games
+                messagebox.showinfo("All Done", "You've voted on all available games!")
+                self.back_to_main_menu()
+                return False
+        else:
+            # No more unvoted games
+            messagebox.showinfo("All Done", "You've voted on all available games!")
+            self.back_to_main_menu()
+            return False
+            
+    def load_next_unvoted_game(self):
+        """Legacy method - now just calls load_next_from_queue"""
+        return self.load_next_from_queue()
+    
+    def update_ui_fast(self):
+        """Update UI without recreating everything - much faster"""
+        if not hasattr(self, 'entry_label') or not self.entry_label:
+            return self.update_ui()
+            
+        entry = self.current_game if hasattr(self, 'current_game') else self.entries[self.current_index]
+        
+        # Update only the text content, don't recreate widgets
+        self.entry_label.config(
+            text=f"Game: {entry['name']}\nDeveloper: {entry['developers']}\nRelease Date: {entry['release_date']}"
+        )
+        
+        if hasattr(self, 'random_unvoted_mode') and self.random_unvoted_mode:
+            self.progress_label.config(text=f"Random Mode: {len(self.game_queue)} games queued")
+        else:
+            self.progress_label.config(text=f"Progress: {self.current_index + 1}/{len(self.entries)}")
+        
+        # Load web page
+        self.root.update()  # Update UI immediately before loading web page
+        self.open_webpage(entry['steam_page_url'])
             
     def vote(self, value):
         # In standard mode
@@ -759,31 +859,61 @@ class SteamGameVoter:
                 conn.commit()
 
             if self.current_index < len(self.entries):
-                self.update_ui()
+                self.update_ui_fast()  # Use fast UI update
             else:
                 self.process_completed = True
                 self.export_results()
                 self.close_application()
         else:
             # In random unvoted mode
+            current_game = self.current_game
+            
             with self.db.get_connection() as conn:
+                conn.isolation_level = 'EXCLUSIVE'  # Use transaction isolation for safety
                 cursor = conn.cursor()
                 
-                # Record the vote
-                current_game = self.current_game
-                cursor.execute('''
-                    INSERT OR REPLACE INTO votes (game_id, user_name, vote, timestamp, exported)
-                    VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0)
-                ''', (current_game['id'], self.user_name, value))
-                
-                conn.commit()
+                try:
+                    # Begin transaction
+                    cursor.execute('BEGIN EXCLUSIVE TRANSACTION')
+                    
+                    # First check if this game has already been voted on by another user or process
+                    cursor.execute('''
+                        SELECT id FROM votes 
+                        WHERE game_id = ? AND user_name = ?
+                    ''', (current_game['id'], self.user_name))
+                    
+                    existing_vote = cursor.fetchone()
+                    
+                    if existing_vote:
+                        # This game has already been voted on since we loaded it
+                        print(f"Game {current_game['name']} was already voted on! Skipping...")
+                        messagebox.showinfo("Already Voted", 
+                                          f"Game '{current_game['name']}' was already voted on by another session. Skipping to next game.")
+                    else:
+                        # Record the vote if not already voted
+                        cursor.execute('''
+                            INSERT INTO votes (game_id, user_name, vote, timestamp, exported)
+                            VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0)
+                        ''', (current_game['id'], self.user_name, value))
+                        print(f"Recorded vote for game {current_game['name']}")
+                    
+                    # Commit transaction
+                    conn.commit()
+                except sqlite3.Error as e:
+                    # If anything goes wrong, roll back
+                    conn.rollback()
+                    print(f"Database error when voting: {e}")
+                    messagebox.showerror("Vote Error", 
+                                       f"Error recording vote: {str(e)}\nSkipping to next game.")
             
-            # Get the next unvoted game
-            if self.load_next_unvoted_game():
-                self.update_ui()
-            # If no more games, load_next_unvoted_game will show a message and return to main menu
+            # Get the next game from preloaded queue
+            self.load_next_from_queue()
             
     def update_ui(self):
+        """Full UI update (slower but more comprehensive)"""
+        if hasattr(self, 'update_ui_fast') and hasattr(self, 'entry_label') and self.entry_label:
+            return self.update_ui_fast()
+            
         if not hasattr(self, 'random_unvoted_mode') or not self.random_unvoted_mode:
             entry = self.entries[self.current_index]
             self.entry_label.config(
@@ -797,9 +927,31 @@ class SteamGameVoter:
             self.entry_label.config(
                 text=f"Game: {entry['name']}\nDeveloper: {entry['developers']}\nRelease Date: {entry['release_date']}"
             )
-            self.progress_label.config(text="Random Mode: Finding unvoted games")
+            
+            # Show how many games are queued
+            queue_count = len(self.game_queue) if hasattr(self, 'game_queue') else 0
+            self.progress_label.config(text=f"Random Mode: {queue_count} games queued")
+            
             self.open_webpage(entry['steam_page_url'])
             
+    def open_webpage(self, url):
+        """Load a web page in the browser"""
+        if self.driver is None:
+            self.initialize_browser()
+            
+        try:
+            # Set a page load timeout to prevent hanging
+            self.driver.set_page_load_timeout(10)
+            self.driver.get(url)
+            
+            # Wait for the body element to appear (faster than waiting for full page load)
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+        except Exception as e:
+            print(f"Error loading web page: {e}")
+            # Don't show error dialog as it would interrupt flow
+
     def save_progress(self):
         """Save current progress to database"""
         try:
@@ -911,15 +1063,6 @@ class SteamGameVoter:
         self.driver = None
         self.update_ui()  # This will cause the new browser to be initialized
 
-    def open_webpage(self, url):
-        if self.driver is None:
-            self.initialize_browser()
-        self.driver.get(url)
-        # Wait for the page to load
-        WebDriverWait(self.driver, 10).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
-
     def close_application(self):
         if self.driver:
             self.driver.quit()
@@ -968,19 +1111,15 @@ class SteamGameVoter:
                                  font=('Arial', 20), bg='white', fg='green', width=3, height=1)
         check_button.grid(row=0, column=2, sticky="e")
 
-        save_button = tk.Button(main_frame, text="Save Progress", command=self.save_progress, 
-                                width=15, bg='#4CAF50', fg='white', font=('Arial', 10))
-        save_button.grid(row=3, column=0, sticky="ew", pady=(0, 10))
-        
         # Back to main menu button
         back_button = tk.Button(main_frame, text="Back to Main Menu", 
                                command=self.back_to_main_menu,
                                width=15, bg='#2196F3', fg='white', font=('Arial', 10))
-        back_button.grid(row=4, column=0, sticky="ew", pady=(0, 10))
+        back_button.grid(row=3, column=0, sticky="ew", pady=(0, 10))
 
         # Browser selection frame
         browser_frame = tk.Frame(main_frame, bg='#f0f0f0')
-        browser_frame.grid(row=5, column=0, sticky="ew")
+        browser_frame.grid(row=4, column=0, sticky="ew")
 
         tk.Label(browser_frame, text="Browser:", bg='#f0f0f0', font=('Arial', 10)).pack(side=tk.LEFT, padx=5)
 
@@ -992,7 +1131,7 @@ class SteamGameVoter:
         # Always on top checkbutton
         always_on_top_check = tk.Checkbutton(main_frame, text="Keep this window in foreground", variable=self.always_on_top_var,
                                              command=self.toggle_always_on_top, bg='#f0f0f0', font=('Arial', 10))
-        always_on_top_check.grid(row=6, column=0, sticky="w", pady=(10, 0))
+        always_on_top_check.grid(row=5, column=0, sticky="w", pady=(10, 0))
 
     def back_to_main_menu(self):
         if self.driver:
@@ -1027,6 +1166,129 @@ class SteamGameVoter:
                 messagebox.showerror("Error", "No entries found in the selected file.")
         else:
             messagebox.showinfo("Info", "No file selected.")
+
+    def wipe_votes_with_confirmation(self):
+        """Wipe all votes and games from the database after confirmation"""
+        if not self.ensure_db_connection():
+            messagebox.showerror("Error", "Please connect to a database first.")
+            return
+            
+        # Create a confirmation dialog
+        confirm_window = tk.Toplevel(self.root)
+        confirm_window.title("Confirm Complete Wipe")
+        confirm_window.geometry("450x300")
+        confirm_window.transient(self.root)
+        confirm_window.grab_set()
+        
+        # Warning icon and message
+        warning_frame = tk.Frame(confirm_window, bg='#ffebee')
+        warning_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        warning_label = tk.Label(
+            warning_frame, 
+            text="⚠️ WARNING: This will delete ALL votes AND games from the database!\n\nThis will completely reset the database.\nThis action cannot be undone.\n\nConsider exporting your votes before wiping.",
+            bg='#ffebee', fg='#b71c1c',
+            font=('Arial', 12),
+            wraplength=400,
+            justify=tk.CENTER
+        )
+        warning_label.pack(pady=(20, 30))
+        
+        # Checkbox for additional confirmation
+        confirm_var = tk.BooleanVar(value=False)
+        confirm_check = tk.Checkbutton(
+            warning_frame, 
+            text="I understand this will permanently delete all votes and games",
+            variable=confirm_var,
+            bg='#ffebee'
+        )
+        confirm_check.pack(pady=(0, 20))
+        
+        # Buttons frame
+        button_frame = tk.Frame(warning_frame, bg='#ffebee')
+        button_frame.pack(pady=(0, 10))
+        
+        def on_cancel():
+            confirm_window.destroy()
+            
+        def on_confirm():
+            if confirm_var.get():
+                confirm_window.destroy()
+                self.wipe_database()
+            else:
+                messagebox.showinfo("Confirmation Required", "Please check the confirmation box to proceed.")
+        
+        cancel_button = tk.Button(
+            button_frame, 
+            text="Cancel", 
+            command=on_cancel,
+            width=10, 
+            bg='#4CAF50', 
+            fg='white'
+        )
+        cancel_button.pack(side=tk.LEFT, padx=10)
+        
+        wipe_button = tk.Button(
+            button_frame, 
+            text="Wipe Database", 
+            command=on_confirm,
+            width=15, 
+            bg='#F44336', 
+            fg='white'
+        )
+        wipe_button.pack(side=tk.RIGHT, padx=10)
+        
+    def wipe_database(self):
+        """Completely wipe votes and games from the database"""
+        try:
+            with self.db.get_connection() as conn:
+                conn.isolation_level = 'EXCLUSIVE'  # Use transaction isolation
+                cursor = conn.cursor()
+                
+                try:
+                    # Begin transaction
+                    cursor.execute('BEGIN EXCLUSIVE TRANSACTION')
+                    
+                    # Get counts before wiping
+                    cursor.execute("SELECT COUNT(*) FROM votes")
+                    vote_count = cursor.fetchone()[0]
+                    
+                    cursor.execute("SELECT COUNT(*) FROM games")
+                    game_count = cursor.fetchone()[0]
+                    
+                    # Delete everything
+                    cursor.execute("DELETE FROM votes")
+                    cursor.execute("DELETE FROM games")
+                    cursor.execute("DELETE FROM progress")
+                    
+                    # Commit the transaction
+                    conn.commit()
+                    
+                    messagebox.showinfo(
+                        "Database Wiped", 
+                        f"Successfully wiped the database:\n• Deleted {vote_count} votes\n• Deleted {game_count} games\n• Reset all progress\n\nThe database is now empty and ready for new games."
+                    )
+                    self.status_label.config(text=f"Wiped database: {vote_count} votes, {game_count} games")
+                    print(f"Wiped database: {vote_count} votes, {game_count} games")
+                    
+                except sqlite3.Error as e:
+                    # If anything goes wrong, roll back
+                    conn.rollback()
+                    print(f"Database error during wipe: {e}")
+                    messagebox.showerror("Wipe Error", f"Error wiping database: {str(e)}")
+                    
+        except Exception as e:
+            print(f"Error wiping database: {e}")
+            messagebox.showerror("Error", f"Failed to wipe database: {str(e)}")
+            
+    def export_and_wipe(self):
+        """Export votes and then wipe the database"""
+        # First export all votes
+        self.export_new_yes_votes()
+        
+        # Then ask if user wants to wipe the database
+        if messagebox.askyesno("Wipe Database", "Export complete. Do you want to completely wipe the database now (delete all votes AND games)?"):
+            self.wipe_votes_with_confirmation()
 
 # Main program
 if __name__ == "__main__":
